@@ -1,83 +1,117 @@
 # GKE + Local Voice Assistant Integration Guide
 
-This guide walks you through integrating your local lightweight voice assistant with a cost-optimized LLM backend running on Google Kubernetes Engine (GKE) Autopilot.
+This guide walks you through integrating the **`ollama-STT-TTS`** lightweight voice assistant with the **`gke-ollama-spot-ai`** cost-optimized LLM backend running on Google Kubernetes Engine.
 
 ## Architecture Overview
 
-- **Remote "Brain"**: `gke-ollama-spot-ai` project deployed on GKE Autopilot with KEDA autoscaling and Spot nodes
-- **Local "Ears & Mouth"**: Lightweight Python voice assistant with ONNX-based STT/TTS models
-- **Communication**: Secure HTTP bridge via KEDA HTTP Add-on interceptor proxy
+- **Remote "Brain"** ([`gke-ollama-spot-ai`](https://github.com/sancliffe/gke-ollama-spot-ai)): Ollama on GKE Autopilot with KEDA HTTP autoscaling and Spot nodes (~$5-10/month)
+- **Local "Ears & Mouth"** ([`ollama-STT-TTS`](https://github.com/sancliffe/ollama-STT-TTS)): Python voice assistant with Whisper (STT), Piper (TTS), and openwakeword detection
+- **Communication**: HTTP bridge via KEDA HTTP Add-on interceptor proxy (no code changes needed)
 
 ---
 
 ## Step 1: Deploy the GKE Backend and Seed the Model
 
-### 1.1 Deploy Your GKE Cluster
-
-Navigate to your `gke-ollama-spot-ai` project and follow its 60-second deployment guide:
+### 1.1 Clone and Deploy the `gke-ollama-spot-ai` Backend
 
 ```bash
-cd backend/scripts
-./setup-cluster.sh
+# Clone the GKE backend repository
+git clone https://github.com/sancliffe/gke-ollama-spot-ai.git
+cd gke-ollama-spot-ai
+
+# Provision GKE cluster (5-10 minutes)
+./scripts/setup-cluster.sh
 ```
 
-This script will:
-- Create a GKE Autopilot cluster with Spot node pool
-- Set up required namespaces
-- Configure storage for model persistence
+This creates:
+- GKE Autopilot cluster with Spot node pool
+- Cluster name: `ai-spot-cluster`
+- Region: `us-central1` (or `us-east1` if quota exhausted)
 
-### 1.2 Apply Kubernetes Manifests
-
-Deploy KEDA and Ollama to your cluster:
+### 1.2 Install KEDA Core and HTTP Add-on (2-3 minutes)
 
 ```bash
-cd ../k8s
-kubectl apply -f storage.yaml
-kubectl apply -f deployment.yaml
-kubectl apply -f service.yaml
-kubectl apply -f keda-autoscaler.yaml
+# Install KEDA core with server-side apply (prevents annotation size errors)
+kubectl apply -f https://github.com/kedacore/keda/releases/download/v2.13.0/keda-2.13.0.yaml --server-side
+
+# Install KEDA HTTP Add-on via Helm (recommended)
+helm repo add kedacore https://kedacore.github.io/charts
+helm repo update
+helm install http-add-on kedacore/keda-add-ons-http --namespace keda --create-namespace
+
+# Wait for KEDA to be ready
+kubectl wait -n keda --for=condition=ready pod -l app.kubernetes.io/name=keda-operator --timeout=120s
+kubectl wait -n keda --for=condition=ready pod -l app.kubernetes.io/name=keda-http-add-on --timeout=120s
 ```
 
-### 1.3 Critical: Match Model Versions
+### 1.3 Deploy Ollama Stack (1-2 minutes)
 
-**Important:** Ensure your seeded model matches your local configuration.
+```bash
+# Apply all Kubernetes manifests
+kubectl apply -f k8s/
 
-- The `seed-initial-model.sh` script defaults to `gemma2:2b`
-- Your local config defaults to `llama3`
+# What gets deployed:
+# - ollama-gpu Deployment (2 CPUs, 4GB RAM per pod, max 2 replicas)
+# - ollama-service ClusterIP Service (internal only)
+# - ollama-storage PersistentVolumeClaim (50GB)
+# - ollama-http-scaler HTTPScaledObject (KEDA traffic monitoring)
+```
+
+### 1.4 Critical: Match Model Versions
+
+The `ollama-STT-TTS` default model is **`llama3`** (7GB).  
+The `gke-ollama-spot-ai` seed script defaults to **`gemma2:2b`** (2GB, faster, cheaper).
 
 **Choose one approach:**
 
-**Option A (Recommended for cost):** Update seed script to use `gemma2:2b`
+**Option A (Recommended for cost & speed):** Update seed script to use `gemma2:2b`
 ```bash
-# Edit backend/scripts/seed-initial-model.sh
+# Edit gke-ollama-spot-ai/scripts/seed-initial-model.sh
 # Change: ollama pull llama3
 # To:     ollama pull gemma2:2b
 ```
 
-**Option B:** Use `llama3` in GKE (larger model, more resource-intensive)
+Then update your local config to match:
 ```bash
-# Edit backend/scripts/seed-initial-model.sh
-# Keep: ollama pull llama3
+# You'll do this in Step 3
 ```
 
-### 1.4 Seed the Model
-
-Run the initialization script (from your GKE project directory):
-
+**Option B:** Keep both defaults (llama3 in both places)
 ```bash
-cd backend/scripts
-./seed-initial-model.sh
+# Keep the seed script as-is (pulls llama3)
+# ollama-STT-TTS config.ini already defaults to llama3
 ```
 
-This creates a persistent volume with your LLM, ensuring it survives pod restarts.
+**Option C:** Use a different model entirely
+```bash
+# Update seed script to any Ollama model: mistral, neural-chat, openchat, etc.
+```
 
-### 1.5 Retrieve Your KEDA IP Address
+### 1.5 Seed the Model (5-10 minutes, happens once)
 
-Get the external IP address of your KEDA interceptor:
+Run the seeding script (from gke-ollama-spot-ai root):
+
+```bash
+./scripts/seed-initial-model.sh
+```
+
+This:
+- Sets deployment to 1 replica (disables KEDA during seeding)
+- Waits for pod to be ready
+- Pulls the model (e.g., gemma2:2b or llama3)
+- Model persists in PersistentVolume across pod restarts
+
+### 1.6 Retrieve Your KEDA IP Address
+
+Get the external IP of the KEDA HTTP interceptor:
 
 ```bash
 export KEDA_IP=$(kubectl get svc -n keda keda-http-add-on-interceptor-proxy -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-echo "Your KEDA IP: $KEDA_IP"
+echo "KEDA IP: $KEDA_IP"
+
+# Verify it's accessible
+curl http://$KEDA_IP/api/tags
+# Should return JSON list of models
 ```
 
 Save this IP—you'll need it in Step 2.
@@ -133,51 +167,94 @@ curl http://ollama.gke.dev/api/tags
 
 ## Step 3: Point the Voice Assistant to the Cloud
 
-### 3.1 Update config.ini
+### 3.1 Clone the `ollama-STT-TTS` Voice Assistant
 
-Open the `frontend/config.ini` file and configure your local voice assistant:
+```bash
+# Clone the voice assistant repository
+git clone https://github.com/sancliffe/ollama-STT-TTS.git
+cd ollama-STT-TTS
+
+# Create and activate Python virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install system dependencies (Linux only)
+# On Debian/Ubuntu:
+sudo apt-get update && sudo apt-get install -y portaudio19-dev ffmpeg
+
+# On Fedora/RHEL:
+sudo dnf install -y portaudio-devel gcc python3-devel ffmpeg pulseaudio-libs-devel
+```
+
+### 3.2 Install Python Dependencies
+
+```bash
+# From the ollama-STT-TTS directory with venv activated
+pip install -r requirements.txt
+```
+
+### 3.3 List Available Audio Devices
+
+Find your microphone and speaker device IDs:
+
+```bash
+python run.py --list-devices      # List input devices (microphone)
+python run.py --list-output-devices  # List output devices (speaker)
+```
+
+Example output:
+```
+Input Devices:
+0: USB Microphone
+1: Built-in Microphone (Primary)
+
+Output Devices:
+0: Speaker
+1: USB Audio
+2: HDMI
+```
+
+### 3.4 Update config.ini for Cloud Backend
+
+Edit the `config.ini` file and modify the `[Models]` section:
 
 ```ini
 [Models]
-# The LLM model must match what you seeded in GKE (Step 1.3)
+# IMPORTANT: Model must match what's seeded in GKE backend
+# If you seeded gemma2:2b in step 1.4:
 ollama_model = gemma2:2b
-# OR if you chose llama3:
+# If you seeded llama3 or using Option B:
 # ollama_model = llama3
 
-# Point to your cloud backend instead of localhost
+# CRITICAL: Point to cloud backend instead of localhost
+# Change from: http://localhost:11434
 ollama_host = http://ollama.gke.dev
-ollama_timeout = 240  # Increased timeout for cold start (see Step 4)
+ollama_timeout = 120  # Increased for cold-start provisioning (2-4 min)
 
-# ONNX-based local speech models (low-latency, runs locally)
-stt_model = base  # Options: tiny, base, small, medium, large
-tts_model = tts_models/en/ljspeech/glow-tts
+# Speech-to-text (runs locally on your machine)
+whisper_model = base  # Options: tiny, base, small, medium, large
+
+# Text-to-speech (runs locally on your machine)
+piper_model = en_US-libritts_r
+
+# Wake word detection (runs locally)
+wakeword = hey_jarvis
 
 [Audio]
-# List available devices with: python list_audio_devices.py
-input_device = 0    # Microphone device ID
-output_device = 0   # Speaker device ID
-
-[Timeouts]
-# Adjusted for cloud latency + cold start provisioning
-http_request_timeout = 240
-speech_recognition_timeout = 30
-synthesis_timeout = 30
-
-[Logging]
-log_level = INFO
-log_file = assistant.log
+# Device indices from --list-devices and --list-output-devices
+device_index = 0  # Your microphone ID (from --list-devices)
+piper_output_device_index = 0  # Your speaker ID (from --list-output-devices)
 ```
 
-### 3.2 Identify Your Audio Devices
+### 3.5 Verify Audio Configuration
 
-If you're unsure about your audio device IDs:
+Test with a quick run:
 
 ```bash
-cd frontend
-python list_audio_devices.py
+# This will list detected models and audio settings, then exit
+python run.py --debug
+# If you see errors about audio devices, re-run --list-devices and update config.ini
 ```
-
-This will list all available microphones and speakers with their device IDs. Update `config.ini` with the correct IDs.
 
 ---
 
@@ -253,144 +330,476 @@ This is the cost tradeoff: You pay nothing during idle periods but accept brief 
 
 ---
 
-## Step 5: Automated Integration (Optional)
+## Step 5: Run the Voice Assistant
 
-The `bridge/connect-assistant.sh` script automates Steps 2 and 3:
+### 5.1 Pre-warm the GKE Cluster
+
+**Critical:** Cold-start provisioning takes 2-4 minutes. Before speaking to the assistant, warm up the cluster:
 
 ```bash
-cd bridge
-./connect-assistant.sh
+# Trigger cluster scale-up
+curl http://ollama.gke.dev/api/tags
+
+# Wait 2-4 minutes for Spot node provisioning
+# Once the command returns a JSON list of models, the cluster is ready
 ```
 
-This script will:
-1. Fetch the KEDA IP from your cluster
-2. Update `/etc/hosts` with `ollama.gke.dev` mapping
-3. Update `frontend/config.ini` with the cloud host URL
+Use this warming script to automate retries:
 
-**Note:** Requires `sudo` access to modify `/etc/hosts`.
+```bash
+#!/bin/bash
+echo "Pre-warming GKE cluster..."
+for i in {1..60}; do
+  if curl -s http://ollama.gke.dev/api/tags > /dev/null 2>&1; then
+    echo "✓ Cluster is warm and ready!"
+    exit 0
+  fi
+  echo "Attempt $i/60: Waiting for cluster... ($(($i * 5)) seconds elapsed)"
+  sleep 5
+done
+
+echo "✗ Timeout: Cluster did not warm up"
+exit 1
+```
+
+### 5.2 Start the Voice Assistant
+
+From the `ollama-STT-TTS` directory with venv activated:
+
+```bash
+# Ensure venv is activated
+source venv/bin/activate
+
+# Start listening for wake word
+python run.py
+```
+
+You'll see:
+```
+Ready! Listening for 'hey jarvis'...
+```
+
+### 5.3 How to Interact
+
+1. **Say the wake word:** "Hey jarvis"
+2. **Assistant responds:** "Yes?" and starts listening
+3. **Speak your command:** "What's the capital of France?"
+4. **Assistant responds:** Thinks, then speaks the answer aloud
+5. **Repeat:** Back to listening for wake word
+
+**Special commands:**
+- Say **"goodbye"** or **"exit"** to stop the assistant
+- Say **"new chat"** or **"reset chat"** to clear conversation history
+
+### 5.4 Additional Command-Line Options
+
+```bash
+# List audio devices
+python run.py --list-devices
+python run.py --list-output-devices
+
+# Use a different model
+python run.py --ollama-model mistral
+
+# Use a different Whisper model (STT)
+python run.py --whisper-model small.en
+
+# Enable debug logging
+python run.py --debug
+
+# Use different audio devices
+python run.py --device-index 1 --piper-output-device-index 2
+
+# Use custom system prompt
+python run.py --system-prompt "You are a helpful pirate captain"
+```
+
+For a full list of options, see `config.ini` or run:
+```bash
+python run.py --help
+```
 
 ---
 
 ## Troubleshooting
 
-### Issue: "Could not find KEDA IP"
-**Solution:** Ensure your GKE cluster is running and KEDA is deployed:
-```bash
-kubectl get svc -n keda keda-http-add-on-interceptor-proxy
-```
-
 ### Issue: "Connection refused to ollama.gke.dev"
-**Solution:** Check hostname resolution:
+
+**Solution:** Verify DNS mapping:
 ```bash
-nslookup ollama.gke.dev
 ping ollama.gke.dev
+# Should resolve to your KEDA IP
 ```
-Update `/etc/hosts` if the IP has changed.
 
-### Issue: "Timeout waiting for response from cloud LLM"
-**Solution:** This is likely a cold start. Run the warm-up curl command:
+If DNS fails, manually add to `/etc/hosts`:
 ```bash
-curl http://ollama.gke.dev/api/tags
-```
-Wait 2-4 minutes for the Spot node to provision.
+export KEDA_IP=$(kubectl get svc -n keda keda-http-add-on-interceptor-proxy \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 
-### Issue: "Model not found in cloud backend"
+# Edit /etc/hosts (Linux/macOS)
+echo "$KEDA_IP ollama.gke.dev" | sudo tee -a /etc/hosts
+
+# Or edit manually on Windows: C:\Windows\System32\drivers\etc\hosts
+```
+
+### Issue: "Model not found" or "API error"
+
 **Solution:** Verify the model was seeded correctly:
 ```bash
-kubectl logs -n default -l app=ollama -f
-```
-Check that `seed-initial-model.sh` completed successfully and the model name matches `config.ini`.
+# Check if pod is running
+kubectl get pods -n default -l app=ollama
 
-### Issue: Audio device errors
-**Solution:** List your audio devices:
-```bash
-python frontend/list_audio_devices.py
+# Check pod logs
+kubectl logs -n default -l app=ollama -f
+
+# List models in container
+kubectl exec -it $(kubectl get pods -n default -l app=ollama -o jsonpath="{.items[0].metadata.name}") -- ollama list
+
+# Manually pull model if missing
+kubectl exec -it $(kubectl get pods -n default -l app=ollama -o jsonpath="{.items[0].metadata.name}") -- ollama pull gemma2:2b
 ```
-Update the device IDs in `config.ini` to match your system.
+
+Also verify `ollama_model` in `config.ini` matches the seeded model.
+
+### Issue: "Timeout waiting for LLM response" (on first request)
+
+**This is normal behavior (cold start).** The cluster is provisioning a Spot node.
+
+**Solution:**
+1. Pre-warm the cluster BEFORE using the voice assistant:
+   ```bash
+   curl http://ollama.gke.dev/api/tags
+   # Wait 2-4 minutes
+   ```
+
+2. Or increase timeout in `config.ini`:
+   ```ini
+   [Models]
+   ollama_timeout = 180  # 3 minutes instead of 2
+   ```
+
+3. Subsequent requests will be < 1 second (once pod is running)
+
+### Issue: "Audio device not found" or garbled audio
+
+**Solution:** Find your correct audio devices:
+```bash
+python run.py --list-devices
+python run.py --list-output-devices
+```
+
+Update `config.ini`:
+```ini
+[Audio]
+device_index = 0  # Your actual microphone ID
+piper_output_device_index = 0  # Your actual speaker ID
+```
+
+Or pass as command-line args:
+```bash
+python run.py --device-index 1 --piper-output-device-index 2
+```
+
+### Issue: "Wake word not detected" or too sensitive
+
+**Solution:** Adjust wake word threshold in `config.ini`:
+```ini
+[Functionality]
+wakeword_threshold = 0.5  # Lower = more sensitive, higher = less sensitive
+vad_aggressiveness = 2    # 1-3: how aggressively silence is detected
+```
+
+Or via command line:
+```bash
+python run.py --wakeword-threshold 0.5 --vad-aggressiveness 2
+```
+
+### Issue: "KEDA IP not found" or kubectl errors
+
+**Solution:** Verify GKE cluster and KEDA setup:
+```bash
+# Check cluster is running
+kubectl get nodes
+
+# Check KEDA pods
+kubectl get pods -n keda
+
+# Check KEDA HTTP Add-on specifically
+kubectl get pods -n keda | grep http-add-on
+
+# If missing, reinstall via Helm:
+helm repo add kedacore https://kedacore.github.io/charts
+helm repo update
+helm install http-add-on kedacore/keda-add-ons-http \
+  --namespace keda --create-namespace
+```
+
+### Issue: "Pod stuck in Pending" state
+
+**Solution:** Check pod events:
+```bash
+kubectl describe pod -l app=ollama
+
+# Common causes:
+# 1. Insufficient Spot quota (try different region)
+# 2. Spot VM preemption (wait and try again)
+# 3. Node not provisioned yet (wait 5-10 minutes)
+```
+
+**Fix:** Restart the pod:
+```bash
+kubectl delete pod -l app=ollama
+# Wait for new pod to start and image to pull
+```
+
+### Issue: "Model pull timeout" or "412 Precondition Failed"
+
+**Solution:** The Ollama version may be outdated.
+
+```bash
+# Force restart deployment to pull latest image
+kubectl rollout restart deployment/ollama-gpu
+
+# Wait for pod to be ready
+kubectl wait --for=condition=ready pod -l app=ollama --timeout=300s
+
+# Re-run seeding
+cd gke-ollama-spot-ai
+./scripts/seed-initial-model.sh
+```
+
+### Issue: Slow inference (responses take > 10 seconds)
+
+**Solution:** Check resource usage and bottlenecks:
+
+```bash
+# Check CPU usage
+kubectl top pod -l app=ollama
+
+# Check if model is loaded
+kubectl exec -it $(kubectl get pods -n default -l app=ollama -o jsonpath="{.items[0].metadata.name}") -- ollama list
+
+# Check Ollama logs for errors
+kubectl logs -l app=ollama -f
+```
+
+**Possible fixes:**
+- Use smaller model (e.g., `gemma2:2b` instead of `llama3`)
+- Increase pod CPU in `k8s/deployment.yaml`
+- Switch to GPU version (see `gke-ollama-spot-ai` README)
+- Check if pod is competing with other workloads
 
 ---
 
 ## Next Steps
 
-1. ✅ Deploy GKE backend (Step 1)
-2. ✅ Configure DNS routing (Step 2)
-3. ✅ Update local config (Step 3)
-4. ✅ Understand cold starts (Step 4)
-5. ▶️ Install Python dependencies:
+**Quick checklist to get voice assistant running:**
+
+1. ✅ Clone and deploy GKE backend
    ```bash
-   cd frontend
+   git clone https://github.com/sancliffe/gke-ollama-spot-ai.git
+   cd gke-ollama-spot-ai
+   ./scripts/setup-cluster.sh
+   # ... install KEDA and deploy Ollama ...
+   ```
+
+2. ✅ Get KEDA IP and update `/etc/hosts`
+   ```bash
+   export KEDA_IP=$(kubectl get svc -n keda keda-http-add-on-interceptor-proxy \
+     -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+   echo "$KEDA_IP ollama.gke.dev" | sudo tee -a /etc/hosts
+   ```
+
+3. ✅ Clone and configure voice assistant
+   ```bash
+   git clone https://github.com/sancliffe/ollama-STT-TTS.git
+   cd ollama-STT-TTS
+   python3 -m venv venv && source venv/bin/activate
    pip install -r requirements.txt
+   python run.py --list-devices  # Find audio device IDs
+   # Edit config.ini with correct ollama_host, model, and device IDs
    ```
-6. ▶️ Start the voice assistant:
+
+4. ✅ Pre-warm the cluster
    ```bash
-   python main.py
+   curl http://ollama.gke.dev/api/tags
+   # Wait 2-4 minutes
    ```
+
+5. ✅ Start talking to the assistant
+   ```bash
+   python run.py
+   # Say: "Hey jarvis"
+   # Ask: "What's the capital of France?"
+   ```
+
+---
+
+## Reference: Command-Line Quick Guide
+
+```bash
+# GKE backend operations
+kubectl get pods -n default -l app=ollama                 # Check Ollama pod
+kubectl get pods -n keda                                  # Check KEDA pods
+kubectl logs -l app=ollama                                # View Ollama logs
+kubectl top pod -l app=ollama                             # Check resource usage
+
+# Voice assistant operations
+python run.py                                             # Start assistant
+python run.py --list-devices                              # List audio devices
+python run.py --debug                                     # Enable debug mode
+python run.py --ollama-model mistral                      # Use different model
+python run.py --device-index 1                            # Use specific mic
+
+# Cloud cluster warming
+curl http://ollama.gke.dev/api/tags                       # Trigger scale-up
+curl http://ollama.gke.dev/api/generate \                 # Test inference
+  -d '{"model":"gemma2:2b","prompt":"Hello"}'
+
+# Cleanup (when done to stop costs)
+cd gke-ollama-spot-ai
+./scripts/cleanup.sh                                      # Delete cluster & storage
+```
+
+---
 
 ---
 
 ## Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ Local Workstation                                               │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌───────────────────────────────────────────────┐              │
-│  │ Python Voice Assistant (frontend/main.py)     │              │
-│  ├───────────────────────────────────────────────┤              │
-│  │ ✓ ONNX STT (whisper-base)      [Local]       │              │
-│  │ ✓ ONNX TTS (Glow-TTS)          [Local]       │              │
-│  │ ✗ LLM (offloaded to cloud)     [Remote]      │              │
-│  └──────────────┬──────────────────────────────┘              │
-│                 │                                                │
-│                 │ HTTP Request                                   │
-│                 │ POST http://ollama.gke.dev/api/generate      │
-│                 │                                                │
-│                 ▼                                                │
-│  /etc/hosts: ollama.gke.dev → <KEDA_IP>                        │
-│                                                                   │
-└────────────────┼────────────────────────────────────────────────┘
-                 │
-         ┌───────┴────────┐
-         │ Internet / VPN │
-         └───────┬────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Google Cloud (GKE Autopilot)                                    │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌────────────────────────────────────────────────┐             │
-│  │ KEDA HTTP Add-on (keda-http-add-on-...)       │             │
-│  │ • Port: 80 / 443                              │             │
-│  │ • Hostname routing: ollama.gke.dev            │             │
-│  └──────────────┬───────────────────────────────┘             │
-│                 │                                                │
-│                 ▼                                                │
-│  ┌────────────────────────────────────────────────┐             │
-│  │ Ollama Pod (Autoscaled via KEDA)              │             │
-│  │ • Model: gemma2:2b or llama3                  │             │
-│  │ • Storage: Persistent Volume                 │             │
-│  │ • Node: Spot (cost-optimized)                │             │
-│  │ • Scale: 0 → 1 pods (KEDA managed)          │             │
-│  └────────────────────────────────────────────────┘             │
-│                                                                   │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│ Local Workstation (ollama-STT-TTS)                                   │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                        │
+│  ┌─────────────────────────────────────────────────────┐             │
+│  │ Python Voice Assistant (python run.py)              │             │
+│  ├─────────────────────────────────────────────────────┤             │
+│  │ ✓ Whisper STT (faster-whisper) [LOCAL, < 500ms]   │             │
+│  │ ✓ Piper TTS (text-to-speech)   [LOCAL, < 1s]      │             │
+│  │ ✓ openwakeword detection        [LOCAL, < 100ms]  │             │
+│  │ ✓ webrtcvad (silence detection) [LOCAL]           │             │
+│  │ ✗ LLM Inference (offloaded)     [REMOTE via HTTP] │             │
+│  │                                                      │             │
+│  │ Audio Input/Output: sounddevice library            │             │
+│  └──────────────┬──────────────────────────────────────┘             │
+│                 │                                                     │
+│                 │ HTTP POST /api/generate                            │
+│                 │ Headers: Host: ollama.gke.dev                      │
+│                 │                                                     │
+│                 ▼                                                     │
+│  /etc/hosts: [KEDA_IP] ollama.gke.dev                               │
+│  (Set by init script, no code changes needed)                       │
+│                                                                        │
+└────────────────┼───────────────────────────────────────────────────┬─┘
+                 │                                                   │
+         ┌───────┴────────────────────────────────────────────┐     │
+         │         Internet / Corporate Network               │     │
+         │         (TLS recommended for production)           │     │
+         └───────┬────────────────────────────────────────────┘     │
+                 │                                                   │
+                 ▼                                                   │
+┌──────────────────────────────────────────────────────────────────────┐
+│ Google Cloud Platform (GKE Autopilot)                                │
+│ Project: gke-ollama-spot-ai                                          │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                        │
+│  ┌─────────────────────────────────────────────────────┐             │
+│  │ KEDA HTTP Add-on Interceptor                       │             │
+│  │ Service: keda-http-add-on-interceptor-proxy        │             │
+│  │ • Type: LoadBalancer                               │             │
+│  │ • Port: 80                                         │             │
+│  │ • Hostname Routing: ollama.gke.dev → Ollama pod   │             │
+│  │ • Scaling Trigger: HTTP traffic                   │             │
+│  └──────────────┬────────────────────────────────────┘             │
+│                 │                                                   │
+│                 ▼                                                   │
+│  ┌─────────────────────────────────────────────────────┐             │
+│  │ Ollama Pod (Kubernetes Deployment)                 │             │
+│  │ Managed by: HTTPScaledObject (KEDA)                │             │
+│  ├─────────────────────────────────────────────────────┤             │
+│  │ Resources: 2 CPUs, 4GB RAM per pod                │             │
+│  │ Max Replicas: 2 (for load balancing)              │             │
+│  │ Min Replicas: 0 (scales to zero when idle)       │             │
+│  │ Model: gemma2:2b or llama3 (persistent)          │             │
+│  │ Storage: 50GB PersistentVolumeClaim              │             │
+│  │ Node Type: Spot VM (cost-optimized)              │             │
+│  │ Availability: Scales up on first request         │             │
+│  │ Latency: < 1 second (warm), 2-4 min (cold)       │             │
+│  └─────────────────────────────────────────────────────┘             │
+│                                                                        │
+│  Cold Start Timeline:                                                 │
+│    Step 1: Request arrives at KEDA proxy                            │
+│    Step 2: KEDA detects traffic → scales from 0 to 1              │
+│    Step 3: GCP provisions Spot node (2-4 min)                      │
+│    Step 4: Ollama pod starts and loads model                       │
+│    Step 5: Inference executes (< 1 sec)                            │
+│                                                                        │
+└──────────────────────────────────────────────────────────────────────┘
 ```
+
+### Data Flow: Voice Request Example
+
+```
+User:      "Hey Jarvis, what's the capital of France?"
+              ↓
+Whisper:   Transcribes audio → "What's the capital of France?"
+              ↓
+HTTP POST: Sends to http://ollama.gke.dev/api/generate
+              ↓
+KEDA:      Checks pod count
+              │
+              ├─ If running: Routes to Ollama pod immediately
+              │
+              └─ If zero: Provisions Spot node + starts pod (2-4 min wait)
+              ↓
+Ollama:    Generates response using gemma2:2b model
+              ↓
+HTTP:      Returns JSON with text response
+              ↓
+Piper TTS: Converts response to audio
+              ↓
+Speaker:   "The capital of France is Paris"
+```
+
+---
+
+## Cost Breakdown
+
+| Component | Cost | Notes |
+|-----------|------|-------|
+| **GKE Cluster Management** | $0/mo | Free Tier (Autopilot) |
+| **Spot CPU (active)** | $0.02-0.04/hr | Only when pod running |
+| **Persistent Storage** | ~$5/mo | 50GB disk (model cache) |
+| **KEDA HTTP Add-on** | ~$0.05/mo | Minimal overhead |
+| **Idle Time** | $0/mo | Pod scales to zero |
+| **Monthly (1 hr/day)** | **~$5-10/mo** | Typical usage |
+| **Monthly (idle only)** | **~$5/mo** | Storage only |
+
+**Compared to alternatives:**
+- Always-on GPU: ~$50-70/month
+- Always-on CPU: ~$20-30/month
+- KEDA auto-scale (this): ~$5-10/month
 
 ---
 
 ## Cost Optimization Tips
 
-1. **Use `gemma2:2b`** instead of `llama3` for 60% lower inference costs
-2. **Embrace cold starts**: The idle time cost savings far exceed the occasional 2-4 minute wait
-3. **Monitor your cluster**: Use GCP Console to track Spot node usage and costs
-4. **Set KEDA scale-down timeout**: Adjust to match your usage patterns
+1. **Use `gemma2:2b`** instead of `llama3` (60% faster, 70% less memory, same quality)
+2. **Embrace cold starts**: Idle time savings far exceed the 2-4 minute wait
+3. **Pre-warm before peak usage**: Warm cluster at 8 AM before work starts (cron job)
+4. **Monitor costs**: `gcloud billing accounts list`
+5. **Set budget alerts**: GCP Console → Billing → Budgets & Alerts
+6. **Clean up immediately**: Run `./scripts/cleanup.sh` when not in use (prevents orphaned costs)
 
 ---
 
 ## Further Reading
 
+- **`gke-ollama-spot-ai` README**: Full Kubernetes deployment details
+- **`ollama-STT-TTS` README**: Voice assistant configuration & troubleshooting
 - [KEDA HTTP Add-on Documentation](https://keda.sh/docs/latest/scalers/http-add-on/)
 - [GCP Spot VMs Documentation](https://cloud.google.com/compute/docs/instances/spot)
 - [Ollama API Documentation](https://github.com/ollama/ollama/blob/main/docs/api.md)
+- [Faster Whisper Models](https://github.com/SYSTRAN/faster-whisper)
+- [Piper TTS Documentation](https://github.com/rhasspy/piper)
