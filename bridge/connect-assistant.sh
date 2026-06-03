@@ -134,5 +134,5 @@ echo
 echo -e "${YELLOW}Cold Start Warning:${NC}"
 echo "  The first request to a cold cluster may take 2-4 minutes."
 echo "  Pre-warm the cluster before important voice sessions."
-echo "  See COLD_START_GUIDE.md for details."
+echo "  See docs/COLD_START_GUIDE.md for details."
 echo

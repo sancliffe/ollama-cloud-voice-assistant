@@ -106,6 +106,14 @@ To manually pre-warm the cluster before interacting with the voice assistant, yo
 curl http://ollama.gke.dev/api/tags
 ```
 
+## Documentation
+
+For more detailed information, please refer to our comprehensive guides:
+* [Integration Guide](docs/INTEGRATION.md): Complete step-by-step setup and architecture deep dive.
+* [Quick Reference](docs/QUICK_REFERENCE.md): Cheat sheet for commands, config patterns, and latency.
+* [Configuration Reference](docs/CONFIG_REFERENCE.md): All `config.ini` options explained.
+* [Cold Start Guide](docs/COLD_START_GUIDE.md): Deep dive into latency management, pre-warming, and cost tradeoffs.
+
 ## License
 
 MIT License. See LICENSE for details.

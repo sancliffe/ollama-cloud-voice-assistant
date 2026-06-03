@@ -232,8 +232,8 @@ kubectl get nodes --show-labels
 
 | Path | Purpose |
 |------|---------|
-| `INTEGRATION.md` | Complete step-by-step integration guide |
-| `COLD_START_GUIDE.md` | Cold start management & optimization |
+| `docs/INTEGRATION.md` | Complete step-by-step integration guide |
+| `docs/COLD_START_GUIDE.md` | Cold start management & optimization |
 | `frontend/config.ini` | Voice assistant configuration |
 | `frontend/main.py` | Voice assistant entry point |
 | `bridge/connect-assistant.sh` | Automated bridge setup |
@@ -265,9 +265,9 @@ kubectl get nodes --show-labels
 
 ## Further Resources
 
-- **Full Integration Guide:** [INTEGRATION.md](./INTEGRATION.md)
-- **Cold Start Management:** [COLD_START_GUIDE.md](./COLD_START_GUIDE.md)
-- **Main README:** [README.md](./README.md)
+- **Full Integration Guide:** [INTEGRATION.md](INTEGRATION.md)
+- **Cold Start Management:** [COLD_START_GUIDE.md](COLD_START_GUIDE.md)
+- **Main README:** [README.md](../README.md)
 - **KEDA Documentation:** https://keda.sh/
 - **Ollama API Docs:** https://github.com/ollama/ollama/blob/main/docs/api.md
 - **GCP Spot VMs:** https://cloud.google.com/compute/docs/instances/spot
