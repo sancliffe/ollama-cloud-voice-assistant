@@ -5,14 +5,13 @@ import os
 import requests
 import pyttsx3
 import speech_recognition as sr
-from faster_whisper import WhisperModel
 
 # Load config
 config = configparser.ConfigParser()
 config.read('config.ini')
 
 # Setup logging
-logging.basicConfig(level=getattr(logging, config['Logging']['log_level'], 'INFO'), 
+logging.basicConfig(level=getattr(logging, config.get('Logging', 'log_level', fallback='INFO')), 
                     filename=config.get('Logging', 'log_file', fallback='assistant.log'),
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -23,12 +22,6 @@ logging.getLogger('').addHandler(console)
 def init_tts():
     engine = pyttsx3.init()
     return engine
-
-def init_stt():
-    model_size = config.get('Models', 'stt_model', fallback='base')
-    logging.info(f"Loading faster-whisper model: {model_size}")
-    model = WhisperModel(model_size, device="cpu", compute_type="int8")
-    return model
 
 def chat_with_ollama(prompt):
     url = f"{config.get('Models', 'ollama_host', fallback='http://localhost:11434')}/api/generate"
@@ -58,11 +51,11 @@ def main():
     
     try:
         tts_engine = init_tts()
-        stt_model = init_stt()
         recognizer = sr.Recognizer()
         
         # Configure audio device
-        input_device = int(config.get('Audio', 'input_device', fallback='0'))
+        input_device_str = config.get('Audio', 'input_device', fallback='0')
+        input_device = int(input_device_str) if input_device_str.isdigit() else None
         
         logging.info(f"Using input device index: {input_device}")
         
@@ -75,21 +68,9 @@ def main():
                     logging.info("\nListening...")
                     audio = recognizer.listen(source, timeout=int(config.get('Timeouts', 'speech_recognition_timeout', fallback='30')))
                     
-                    # Convert audio to wav format in memory for faster-whisper
-                    wav_data = audio.get_wav_data()
-                    
-                    # write to temp file since faster-whisper prefers file or numpy array
-                    temp_file = "temp_audio.wav"
-                    with open(temp_file, "wb") as f:
-                        f.write(wav_data)
-                        
                     logging.info("Transcribing...")
-                    segments, info = stt_model.transcribe(temp_file, beam_size=5)
-                    
-                    transcript = "".join([segment.text for segment in segments]).strip()
-                    
-                    if os.path.exists(temp_file):
-                        os.remove(temp_file)
+                    # Using recognize_google as a lightweight fallback for STT
+                    transcript = recognizer.recognize_google(audio)
                     
                     if not transcript:
                         continue
@@ -112,6 +93,10 @@ def main():
                     tts_engine.say(response_text)
                     tts_engine.runAndWait()
                     
+                except sr.UnknownValueError:
+                    logging.info("Could not understand audio.")
+                except sr.RequestError as e:
+                    logging.error(f"Could not request results from STT service; {e}")
                 except sr.WaitTimeoutError:
                     continue
                 except Exception as e:
