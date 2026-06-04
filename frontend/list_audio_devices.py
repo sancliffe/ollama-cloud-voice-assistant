@@ -1,5 +1,6 @@
 import speech_recognition as sr
 
+
 def list_devices():
     print("Available Audio Devices:\n")
     try:
@@ -9,6 +10,7 @@ def list_devices():
     except Exception as e:
         print(f"Error querying devices: {e}")
         print("Make sure PyAudio is installed correctly.")
+
 
 if __name__ == "__main__":
     list_devices()
