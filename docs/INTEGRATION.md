@@ -1,23 +1,22 @@
 # GKE + Local Voice Assistant Integration Guide
 
-This guide walks you through integrating the **`ollama-STT-TTS`** lightweight voice assistant with the **`gke-ollama-spot-ai`** cost-optimized LLM backend running on Google Kubernetes Engine.
+This guide walks you through integrating the **`frontend`** lightweight voice assistant with the **`backend`** cost-optimized LLM backend running on Google Kubernetes Engine.
 
 ## Architecture Overview
 
-- **Remote "Brain"** ([`gke-ollama-spot-ai`](https://github.com/sancliffe/gke-ollama-spot-ai)): Ollama on GKE Autopilot with KEDA HTTP autoscaling and Spot nodes (~$5-10/month)
-- **Local "Ears & Mouth"** ([`ollama-STT-TTS`](https://github.com/sancliffe/ollama-STT-TTS)): Python voice assistant with Whisper (STT), Piper (TTS), and openwakeword detection
+- **Remote "Brain"** (`backend`): Ollama on GKE Autopilot with KEDA HTTP autoscaling and Spot nodes (~$5-10/month)
+- **Local "Ears & Mouth"** (`frontend`): Python voice assistant with Whisper (STT), Piper (TTS), and openwakeword detection
 - **Communication**: HTTP bridge via KEDA HTTP Add-on interceptor proxy (no code changes needed)
 
 ---
 
 ## Step 1: Deploy the GKE Backend and Seed the Model
 
-### 1.1 Clone and Deploy the `gke-ollama-spot-ai` Backend
+### 1.1 Navigate to and Deploy the Backend
 
 ```bash
-# Clone the GKE backend repository
-git clone https://github.com/sancliffe/gke-ollama-spot-ai.git
-cd gke-ollama-spot-ai
+# Navigate to the GKE backend directory
+cd backend
 
 # Provision GKE cluster (5-10 minutes)
 ./scripts/setup-cluster.sh
@@ -59,14 +58,14 @@ kubectl apply -f k8s/
 
 ### 1.4 Critical: Match Model Versions
 
-The `ollama-STT-TTS` default model is **`llama3`** (7GB).  
-The `gke-ollama-spot-ai` seed script defaults to **`gemma2:2b`** (2GB, faster, cheaper).
+The `frontend` default model is **`llama3`** (7GB).  
+The `backend` seed script defaults to **`gemma2:2b`** (2GB, faster, cheaper).
 
 **Choose one approach:**
 
 **Option A (Recommended for cost & speed):** Update seed script to use `gemma2:2b`
 ```bash
-# Edit gke-ollama-spot-ai/scripts/seed-initial-model.sh
+# Edit backend/scripts/seed-initial-model.sh
 # Change: ollama pull llama3
 # To:     ollama pull gemma2:2b
 ```
@@ -79,7 +78,7 @@ Then update your local config to match:
 **Option B:** Keep both defaults (llama3 in both places)
 ```bash
 # Keep the seed script as-is (pulls llama3)
-# ollama-STT-TTS config.ini already defaults to llama3
+# frontend/config.ini already defaults to llama3
 ```
 
 **Option C:** Use a different model entirely
@@ -89,7 +88,7 @@ Then update your local config to match:
 
 ### 1.5 Seed the Model (5-10 minutes, happens once)
 
-Run the seeding script (from gke-ollama-spot-ai root):
+Run the seeding script (from the backend directory):
 
 ```bash
 ./scripts/seed-initial-model.sh
@@ -167,12 +166,11 @@ curl http://ollama.gke.dev/api/tags
 
 ## Step 3: Point the Voice Assistant to the Cloud
 
-### 3.1 Clone the `ollama-STT-TTS` Voice Assistant
+### 3.1 Navigate to the Frontend Directory
 
 ```bash
-# Clone the voice assistant repository
-git clone https://github.com/sancliffe/ollama-STT-TTS.git
-cd ollama-STT-TTS
+# Navigate to the frontend directory
+cd frontend
 
 # Create and activate Python virtual environment
 python3 -m venv venv
@@ -189,7 +187,7 @@ sudo dnf install -y portaudio-devel gcc python3-devel ffmpeg pulseaudio-libs-dev
 ### 3.2 Install Python Dependencies
 
 ```bash
-# From the ollama-STT-TTS directory with venv activated
+# From the frontend directory with venv activated
 pip install -r requirements.txt
 ```
 
@@ -198,8 +196,8 @@ pip install -r requirements.txt
 Find your microphone and speaker device IDs:
 
 ```bash
-python run.py --list-devices      # List input devices (microphone)
-python run.py --list-output-devices  # List output devices (speaker)
+python list_audio_devices.py      # List input devices (microphone)
+python list_audio_devices.py  # List output devices (speaker)
 ```
 
 Example output:
@@ -252,7 +250,7 @@ Test with a quick run:
 
 ```bash
 # This will list detected models and audio settings, then exit
-python run.py --debug
+python main.py --debug
 # If you see errors about audio devices, re-run --list-devices and update config.ini
 ```
 
@@ -364,14 +362,14 @@ exit 1
 
 ### 5.2 Start the Voice Assistant
 
-From the `ollama-STT-TTS` directory with venv activated:
+From the `frontend` directory with venv activated:
 
 ```bash
 # Ensure venv is activated
 source venv/bin/activate
 
 # Start listening for wake word
-python run.py
+python main.py
 ```
 
 You'll see:
@@ -395,28 +393,28 @@ Ready! Listening for 'hey jarvis'...
 
 ```bash
 # List audio devices
-python run.py --list-devices
-python run.py --list-output-devices
+python list_audio_devices.py
+python list_audio_devices.py
 
 # Use a different model
-python run.py --ollama-model mistral
+python main.py --ollama-model mistral
 
 # Use a different Whisper model (STT)
-python run.py --whisper-model small.en
+python main.py --whisper-model small.en
 
 # Enable debug logging
-python run.py --debug
+python main.py --debug
 
 # Use different audio devices
-python run.py --device-index 1 --piper-output-device-index 2
+python main.py --device-index 1 --piper-output-device-index 2
 
 # Use custom system prompt
-python run.py --system-prompt "You are a helpful pirate captain"
+python main.py --system-prompt "You are a helpful pirate captain"
 ```
 
 For a full list of options, see `config.ini` or run:
 ```bash
-python run.py --help
+python main.py --help
 ```
 
 ---
@@ -484,8 +482,8 @@ Also verify `ollama_model` in `config.ini` matches the seeded model.
 
 **Solution:** Find your correct audio devices:
 ```bash
-python run.py --list-devices
-python run.py --list-output-devices
+python list_audio_devices.py
+python list_audio_devices.py
 ```
 
 Update `config.ini`:
@@ -497,7 +495,7 @@ piper_output_device_index = 0  # Your actual speaker ID
 
 Or pass as command-line args:
 ```bash
-python run.py --device-index 1 --piper-output-device-index 2
+python main.py --device-index 1 --piper-output-device-index 2
 ```
 
 ### Issue: "Wake word not detected" or too sensitive
@@ -511,7 +509,7 @@ vad_aggressiveness = 2    # 1-3: how aggressively silence is detected
 
 Or via command line:
 ```bash
-python run.py --wakeword-threshold 0.5 --vad-aggressiveness 2
+python main.py --wakeword-threshold 0.5 --vad-aggressiveness 2
 ```
 
 ### Issue: "KEDA IP not found" or kubectl errors
@@ -564,7 +562,7 @@ kubectl rollout restart deployment/ollama-gpu
 kubectl wait --for=condition=ready pod -l app=ollama --timeout=300s
 
 # Re-run seeding
-cd gke-ollama-spot-ai
+cd backend
 ./scripts/seed-initial-model.sh
 ```
 
@@ -585,8 +583,8 @@ kubectl logs -l app=ollama -f
 
 **Possible fixes:**
 - Use smaller model (e.g., `gemma2:2b` instead of `llama3`)
-- Increase pod CPU in `k8s/deployment.yaml`
-- Switch to GPU version (see `gke-ollama-spot-ai` README)
+- Increase pod CPU in `backend/k8s/deployment.yaml`
+- Switch to GPU version (see `backend` README)
 - Check if pod is competing with other workloads
 
 ---
@@ -595,10 +593,9 @@ kubectl logs -l app=ollama -f
 
 **Quick checklist to get voice assistant running:**
 
-1. ✅ Clone and deploy GKE backend
+1. ✅ Navigate to and deploy backend
    ```bash
-   git clone https://github.com/sancliffe/gke-ollama-spot-ai.git
-   cd gke-ollama-spot-ai
+   cd backend
    ./scripts/setup-cluster.sh
    # ... install KEDA and deploy Ollama ...
    ```
@@ -610,13 +607,12 @@ kubectl logs -l app=ollama -f
    echo "$KEDA_IP ollama.gke.dev" | sudo tee -a /etc/hosts
    ```
 
-3. ✅ Clone and configure voice assistant
+3. ✅ Navigate to and configure frontend
    ```bash
-   git clone https://github.com/sancliffe/ollama-STT-TTS.git
-   cd ollama-STT-TTS
+   cd frontend
    python3 -m venv venv && source venv/bin/activate
    pip install -r requirements.txt
-   python run.py --list-devices  # Find audio device IDs
+   python list_audio_devices.py  # Find audio device IDs
    # Edit config.ini with correct ollama_host, model, and device IDs
    ```
 
@@ -628,7 +624,7 @@ kubectl logs -l app=ollama -f
 
 5. ✅ Start talking to the assistant
    ```bash
-   python run.py
+   python main.py
    # Say: "Hey jarvis"
    # Ask: "What's the capital of France?"
    ```
@@ -645,11 +641,11 @@ kubectl logs -l app=ollama                                # View Ollama logs
 kubectl top pod -l app=ollama                             # Check resource usage
 
 # Voice assistant operations
-python run.py                                             # Start assistant
-python run.py --list-devices                              # List audio devices
-python run.py --debug                                     # Enable debug mode
-python run.py --ollama-model mistral                      # Use different model
-python run.py --device-index 1                            # Use specific mic
+python main.py                                             # Start assistant
+python list_audio_devices.py                              # List audio devices
+python main.py --debug                                     # Enable debug mode
+python main.py --ollama-model mistral                      # Use different model
+python main.py --device-index 1                            # Use specific mic
 
 # Cloud cluster warming
 curl http://ollama.gke.dev/api/tags                       # Trigger scale-up
@@ -657,7 +653,7 @@ curl http://ollama.gke.dev/api/generate \                 # Test inference
   -d '{"model":"gemma2:2b","prompt":"Hello"}'
 
 # Cleanup (when done to stop costs)
-cd gke-ollama-spot-ai
+cd backend
 ./scripts/cleanup.sh                                      # Delete cluster & storage
 ```
 
@@ -669,11 +665,11 @@ cd gke-ollama-spot-ai
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ Local Workstation (ollama-STT-TTS)                                   │
+│ Local Workstation (frontend)                                         │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                        │
 │  ┌─────────────────────────────────────────────────────┐             │
-│  │ Python Voice Assistant (python run.py)              │             │
+│  │ Python Voice Assistant (python main.py)              │             │
 │  ├─────────────────────────────────────────────────────┤             │
 │  │ ✓ Whisper STT (faster-whisper) [LOCAL, < 500ms]   │             │
 │  │ ✓ Piper TTS (text-to-speech)   [LOCAL, < 1s]      │             │
@@ -701,7 +697,7 @@ cd gke-ollama-spot-ai
                  ▼                                                   │
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Google Cloud Platform (GKE Autopilot)                                │
-│ Project: gke-ollama-spot-ai                                          │
+│ Project: ollama-cloud-voice-assistant                                │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                        │
 │  ┌─────────────────────────────────────────────────────┐             │
@@ -796,8 +792,8 @@ Speaker:   "The capital of France is Paris"
 
 ## Further Reading
 
-- **`gke-ollama-spot-ai` README**: Full Kubernetes deployment details
-- **`ollama-STT-TTS` README**: Voice assistant configuration & troubleshooting
+- **`backend` README**: Full Kubernetes deployment details
+- **`frontend` README**: Voice assistant configuration & troubleshooting
 - [KEDA HTTP Add-on Documentation](https://keda.sh/docs/latest/scalers/http-add-on/)
 - [GCP Spot VMs Documentation](https://cloud.google.com/compute/docs/instances/spot)
 - [Ollama API Documentation](https://github.com/ollama/ollama/blob/main/docs/api.md)
