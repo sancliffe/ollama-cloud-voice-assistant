@@ -53,12 +53,14 @@ echo
 
 # Step 3: Test connectivity
 echo -e "${YELLOW}[3/5]${NC} Testing connectivity to cloud backend..."
-if timeout 10 curl -s "http://${KEDA_IP}/api/tags" > /dev/null 2>&1; then
+HTTP_CODE=$(timeout 10 curl -s -o /dev/null -w "%{http_code}" "http://${KEDA_IP}/api/tags" || echo "000")
+
+if [ "$HTTP_CODE" = "200" ]; then
     echo -e "${GREEN}✓${NC} Cloud backend is responding (cluster is WARM)"
-elif timeout 10 curl -s -w "Status: %{http_code}" "http://${KEDA_IP}/api/tags" > /dev/null 2>&1; then
-    echo -e "${YELLOW}⚠${NC} Cloud backend is responding but may be cold (this is normal)"
+elif [[ "$HTTP_CODE" =~ ^(503|502|404)$ ]]; then
+    echo -e "${YELLOW}⚠${NC} Cloud backend is responding but may be cold (HTTP $HTTP_CODE - this is normal)"
 else
-    echo -e "${YELLOW}⚠${NC} Could not reach cloud backend yet (may still be starting up)"
+    echo -e "${YELLOW}⚠${NC} Could not reach cloud backend yet (may still be starting up, HTTP $HTTP_CODE)"
     echo "    This is normal - KEDA will provision pods on first request"
 fi
 echo

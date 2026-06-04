@@ -1,6 +1,6 @@
-sounddevice==0.4.7
 numpy
 requests==2.32.3
 pyttsx3==2.90
-scipy
 SpeechRecognition==3.10.4
+PyAudio
+

@@ -1,7 +1,5 @@
 import configparser
-import json
 import logging
-import os
 import requests
 import pyttsx3
 import speech_recognition as sr
