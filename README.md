@@ -1,4 +1,4 @@
-# Ollama Cloud Voice Assistant
+# Ollama Cloud Voice Assistant - Work in Progress
 
 A hybrid AI architecture that pairs a highly responsive local speech-to-text/text-to-speech (STT/TTS) client with a cost-optimized, scale-to-zero LLM backend running on Google Kubernetes Engine (GKE) Autopilot.
 
